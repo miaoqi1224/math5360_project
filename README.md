@@ -26,6 +26,18 @@ cd "/Users/regina/Desktop/5360 project"
 python3 co_project.py
 ```
 
+## GitHub sharing
+
+If you want to publish this folder to GitHub after authenticating with GitHub CLI:
+
+```bash
+cd "/Users/regina/Desktop/5360 project"
+./publish_github.sh
+```
+
+By default the script creates a private repository named `gr5360-co-project` under the
+currently authenticated GitHub account and pushes the local `main` branch.
+
 ## Quick mode vs full mode
 
 The professor's full optimization grid is large:
