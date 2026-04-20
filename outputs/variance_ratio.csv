@@ -1,0 +1,8 @@
+horizon_bars,horizon_minutes,variance_ratio,vr_interpretation
+1,5,1.0,close to random walk
+3,15,0.9850766097225306,close to random walk
+6,30,0.9849779521322842,close to random walk
+12,60,0.9768022509776426,mean-reverting
+24,120,0.9633196847918483,mean-reverting
+48,240,0.9604425771344354,mean-reverting
+96,480,0.9657870861606724,mean-reverting
