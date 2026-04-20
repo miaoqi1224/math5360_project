@@ -1,0 +1,8 @@
+.DS_Store
+__pycache__/
+outputs/
+.tools/
+*.pyc
+*.pyo
+*.dSYM/
+co_project
