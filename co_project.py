@@ -9,7 +9,7 @@ import pandas as pd
 
 try:
     import xlrd
-except Exception:  # pragma: no cover
+except Exception:
     xlrd = None
 
 
@@ -193,81 +193,7 @@ def combine_rw_tests(vr_df: pd.DataFrame, pr_df: pd.DataFrame) -> pd.DataFrame:
     return merged
 
 
-def write_report_and_ppt(market: MarketConfig, df: pd.DataFrame, combined_df: pd.DataFrame) -> None:
-    mean_reverting_horizons = combined_df.loc[
-        combined_df["joint_interpretation"] == "mean-reverting", "horizon_minutes"
-    ].tolist()
-    mixed_horizons = combined_df.loc[
-        combined_df["joint_interpretation"] == "mixed evidence", "horizon_minutes"
-    ].tolist()
-
-    report = f"""# Statistical Testing Report
-
-## Data
-
-We study the CO (Brent Crude) futures market using 5-minute data from {df["DateTime"].iloc[0]} to {df["DateTime"].iloc[-1]}. According to TF Data, the market trades on {market.exchange} in {market.currency}, with point value {market.point_value}, tick size {market.tick_size}, tick value {market.tick_value}, and suggested round-turn slippage {market.slippage}.
-
-## Variance Ratio Test
-
-The Variance Ratio (VR) test is used to compare the behavior of the CO time series against the Random Walk benchmark. If the VR value is close to 1, the series is approximately consistent with Random Walk. If VR is above 1, it suggests trend-following behavior. If VR is below 1, it suggests mean-reversion.
-
-Our results show that the 5-minute, 15-minute, and 30-minute horizons are close to Random Walk. Starting from 60 minutes, the VR values are below 1 and remain below 1 at 120, 240, and 480 minutes. This indicates stronger mean-reverting behavior at medium and longer intraday horizons.
-
-## Push-Response Test
-
-The Push-Response (PR) test measures whether a future price change tends to continue or reverse a previous price move. A positive response beta suggests trend-following, while a negative response beta suggests mean-reversion.
-
-The Push-Response results are mixed across time scales. At 5, 60, 120, and 480 minutes, the test indicates mean-reversion. At 15, 30, and 240 minutes, it indicates trend-following. Therefore, the PR test suggests that predictability in Brent crude depends on the time scale rather than following a single pattern across all horizons.
-
-## Joint Inefficiency Interpretation
-
-We combine the two tests by checking whether both point in the same direction. The strongest agreement appears at these horizons: {mean_reverting_horizons} minutes, where both tests support mean-reversion. The horizons with mixed evidence are: {mixed_horizons} minutes.
-
-Overall, the current evidence suggests that Brent crude is close to Random Walk at very short horizons, but displays clearer mean-reverting inefficiency at medium horizons, especially around 60 to 120 minutes, and again at 480 minutes.
-
-## Final Conclusion
-
-The statistical testing section does not support a uniform trend-following interpretation across all horizons. Instead, the market shows horizon-dependent predictability, with the clearest and most consistent inefficiency being mean-reversion at medium time scales.
-"""
-
-    ppt = f"""# PPT Outline: Statistical Testing
-
-## Slide 1. Statistical Testing Setup
-- Market: CO (Brent Crude)
-- Data frequency: 5-minute bars
-- Sample: {df["DateTime"].iloc[0]} to {df["DateTime"].iloc[-1]}
-- Tests used: Variance Ratio and Push-Response
-- Goal: identify inefficiency type and its time-scale location
-
-## Slide 2. Variance Ratio Results
-- 5, 15, 30 minutes: close to Random Walk
-- 60, 120, 240, 480 minutes: VR < 1
-- Interpretation: stronger mean-reversion from 60 minutes onward
-- Figure: outputs/variance_ratio.png
-
-## Slide 3. Push-Response Results
-- 5, 60, 120, 480 minutes: mean-reverting
-- 15, 30, 240 minutes: trend-following
-- Interpretation: predictability depends on horizon
-- Figure: outputs/push_response_beta.png
-
-## Slide 4. Joint Time-Scale Interpretation
-- Consistent mean-reversion at: {mean_reverting_horizons} minutes
-- Mixed evidence at: {mixed_horizons} minutes
-- Very short horizons are closer to Random Walk
-
-## Slide 5. Final Conclusion
-- Brent crude shows horizon-dependent predictability
-- The clearest inefficiency is mean-reversion
-- Most reliable horizons: 60, 120, and 480 minutes
-- This is the main takeaway for the statistical testing section
-"""
-
-    (OUTPUT_DIR / "statistical_testing_report.md").write_text(report, encoding="utf-8")
-    (OUTPUT_DIR / "statistical_testing_ppt.md").write_text(ppt, encoding="utf-8")
-
-
-def save_outputs(market: MarketConfig, df: pd.DataFrame, vr_df: pd.DataFrame, pr_df: pd.DataFrame, combined_df: pd.DataFrame) -> None:
+def save_outputs(vr_df: pd.DataFrame, pr_df: pd.DataFrame, combined_df: pd.DataFrame) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     vr_df.to_csv(OUTPUT_DIR / "variance_ratio.csv", index=False)
@@ -295,28 +221,6 @@ def save_outputs(market: MarketConfig, df: pd.DataFrame, vr_df: pd.DataFrame, pr
     fig.tight_layout()
     fig.savefig(OUTPUT_DIR / "push_response_beta.png", dpi=160)
     plt.close(fig)
-
-    summary = f"""# Statistical Testing Summary
-
-- Market: {market.ticker} ({market.name})
-- Exchange: {market.exchange}
-- Currency: {market.currency}
-- Point value: {market.point_value}
-- Tick size: {market.tick_size}
-- Tick value: {market.tick_value}
-- Slippage: {market.slippage}
-- Sample bars: {len(df)}
-- Sample start: {df["DateTime"].iloc[0]}
-- Sample end: {df["DateTime"].iloc[-1]}
-
-## Joint Results
-
-```text
-{combined_df.to_string(index=False, float_format=lambda x: f"{x:.6f}")}
-```
-"""
-    (OUTPUT_DIR / "summary.md").write_text(summary, encoding="utf-8")
-    write_report_and_ppt(market, df, combined_df)
 
 
 def print_console_summary(market: MarketConfig, df: pd.DataFrame, combined_df: pd.DataFrame) -> None:
@@ -352,7 +256,7 @@ def main() -> None:
     vr_df = run_variance_ratio_scan(df)
     pr_df = run_push_response_scan(df)
     combined_df = combine_rw_tests(vr_df, pr_df)
-    save_outputs(market, df, vr_df, pr_df, combined_df)
+    save_outputs(vr_df, pr_df, combined_df)
     print_console_summary(market, df, combined_df)
 
 
