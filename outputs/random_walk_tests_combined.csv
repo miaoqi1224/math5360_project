@@ -1,8 +1,0 @@
-horizon_bars,horizon_minutes,variance_ratio,vr_interpretation,beta,signed_response,pr_interpretation,joint_interpretation
-1,5,1.0,close to random walk,-0.004048280270926473,-0.0014313408135226222,mean-reverting,mixed evidence
-3,15,0.9850766097225306,close to random walk,0.0014716003718473203,-0.0003543325526932088,trend-following,mixed evidence
-6,30,0.9849779521322842,close to random walk,0.0015017086530677835,0.001241237177785756,trend-following,mixed evidence
-12,60,0.9768022509776426,mean-reverting,-0.014483556777701074,0.002435673245066256,mean-reverting,mean-reverting
-24,120,0.9633196847918483,mean-reverting,-0.014114002797345992,-0.0028730247954530963,mean-reverting,mean-reverting
-48,240,0.9604425771344354,mean-reverting,0.007587688222547108,0.020177389131792636,trend-following,mixed evidence
-96,480,0.9657870861606724,mean-reverting,-0.01025466982822907,-0.01847326336831569,mean-reverting,mean-reverting
