@@ -2,19 +2,23 @@
 
 Primary market: `CO` (Brent Crude).
 
-Current repository contents:
-
-- `co_project.cpp`: initial C++ draft
-- `co_project.py`: main Python pipeline
-- `outputs/summary.md`: summary write-up
-- `outputs/variance_ratio.csv`: Variance Ratio results
-- `outputs/push_response.csv`: Push-Response results
-- `outputs/random_walk_tests_combined.csv`: combined Random Walk test table
-- `outputs/walk_forward_quarterly_parameters.csv`: walk-forward optimization table
-
-The current Python workflow covers:
+This repository is now focused only on the statistical testing section:
 
 - Variance Ratio test
 - Push-Response test
-- 4-year in-sample / 1-quarter out-of-sample walk-forward optimization
+- inefficiency interpretation
+- time-scale analysis
 
+Main file:
+
+- `co_project.py`
+
+Main outputs:
+
+- `outputs/variance_ratio.csv`
+- `outputs/push_response.csv`
+- `outputs/random_walk_tests_combined.csv`
+- `outputs/variance_ratio.png`
+- `outputs/push_response_beta.png`
+- `outputs/statistical_testing_report.md`
+- `outputs/statistical_testing_ppt.md`

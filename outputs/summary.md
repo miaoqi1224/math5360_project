@@ -1,6 +1,6 @@
-# CO Brent Crude Final Project Summary
+# Statistical Testing Summary
 
-## Market
+- Market: CO (Brent Crude)
 - Exchange: ICE
 - Currency: USD
 - Point value: 1000.0
@@ -11,7 +11,8 @@
 - Sample start: 2003-08-01 14:05:00
 - Sample end: 2026-04-10 19:30:00
 
-## Random Walk Tests
+## Joint Results
+
 ```text
  horizon_bars  horizon_minutes  variance_ratio    vr_interpretation      beta  signed_response pr_interpretation joint_interpretation
             1                5        1.000000 close to random walk -0.004048        -0.001431    mean-reverting       mixed evidence
@@ -22,13 +23,3 @@
            48              240        0.960443       mean-reverting  0.007588         0.020177   trend-following       mixed evidence
            96              480        0.965787       mean-reverting -0.010255        -0.018473    mean-reverting       mean-reverting
 ```
-
-## Walk-Forward Out-of-Sample Summary
-- net_profit: 372780.95000001224
-- worst_drawdown: -5607.25
-- pnl_std: 66.70671229977853
-- trade_count: 3203.5
-- return_over_drawdown: 66.48195639573984
-- sharpe_like: 0.01779029112815925
-
-Grid mode: QUICK (5 channel values, 5 stop values)
