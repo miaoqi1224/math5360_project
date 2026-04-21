@@ -16,6 +16,7 @@ except Exception:
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "outputs"
 
+# Prefer files in the repo itself, then fall back to the earlier working folder.
 DATA_CANDIDATES = [
     BASE_DIR / "CO-5minHLV.csv",
     Path("/Users/regina/Desktop/5360 project/CO-5minHLV.csv"),
@@ -50,6 +51,7 @@ def resolve_existing_path(candidates: list[Path]) -> Path:
 
 
 def load_market_config() -> MarketConfig:
+    # Use hard-coded CO specs if TF Data.xls is unavailable locally.
     fallback = MarketConfig(
         ticker="CO",
         name="Brent Crude",
@@ -95,6 +97,7 @@ def compute_log_returns(close: np.ndarray) -> np.ndarray:
 
 
 def variance_ratio(one_bar_returns: np.ndarray, q: int) -> float:
+    # Compare q-bar return variance to q times the 1-bar variance.
     if q <= 0 or len(one_bar_returns) <= q:
         return float("nan")
 
@@ -135,6 +138,7 @@ def run_variance_ratio_scan(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def push_response_for_horizon(close: np.ndarray, horizon: int) -> tuple[float, float]:
+    # Build adjacent non-overlapping push and response windows of equal length.
     pushes = close[horizon::horizon] - close[:-horizon:horizon]
     responses = close[2 * horizon :: horizon] - close[horizon:-horizon:horizon]
 
@@ -181,6 +185,7 @@ def combine_rw_tests(vr_df: pd.DataFrame, pr_df: pd.DataFrame) -> pd.DataFrame:
     merged = vr_df.merge(pr_df, on=["horizon_bars", "horizon_minutes"], how="inner")
 
     def classify(row: pd.Series) -> str:
+        # Treat agreement between both tests as the cleanest interpretation.
         vr_type = row["vr_interpretation"]
         pr_type = row["pr_interpretation"]
         if vr_type == pr_type and vr_type in {"trend-following", "mean-reverting"}:
@@ -194,6 +199,7 @@ def combine_rw_tests(vr_df: pd.DataFrame, pr_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def save_outputs(vr_df: pd.DataFrame, pr_df: pd.DataFrame, combined_df: pd.DataFrame) -> None:
+    # Save tables first, then export the two figures used in the PPT section.
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     vr_df.to_csv(OUTPUT_DIR / "variance_ratio.csv", index=False)
