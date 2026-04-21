@@ -2,7 +2,7 @@
 
 Primary market: `CO` (Brent Crude).
 
-This repository is now focused only on the statistical testing section:
+This repository is focused only on the statistical testing section:
 
 - Variance Ratio test
 - Push-Response test
