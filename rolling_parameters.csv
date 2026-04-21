@@ -1,0 +1,2 @@
+segment,train_start,train_end,oos_start,oos_end,best_L,best_S,oos_return,oos_max_dd,oos_return_to_dd,oos_sharpe,oos_trades
+0,1984-01-03 10:10:00,1988-09-21 10:35:00,1988-09-21 10:40:00,1989-01-06 11:45:00,1000,0.01,1241.9199999999983,-782.070000000007,1.5879908448092717,2.092938667625877,20.5

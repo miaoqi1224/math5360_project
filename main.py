@@ -445,6 +445,272 @@ def week2_interpretation_text(results: pd.DataFrame, best_row: pd.Series) -> str
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Week 3 - Rolling walk-forward OOS (reuses optimize_parameters + run_strategy)
+# ---------------------------------------------------------------------------
+
+
+def infer_bars_per_trading_day(df: pd.DataFrame) -> float:
+    """
+    Median number of 5-minute rows per calendar day (for converting years/months to bars).
+
+    If parsing fails, falls back to ~78 bars/day (common RTH 5-min count heuristic).
+    """
+    dt = pd.to_datetime(
+        df["Date"].astype(str).str.strip() + " " + df["Time"].astype(str).str.strip(),
+        format="%m/%d/%Y %H:%M",
+        errors="coerce",
+    )
+    day = dt.dt.normalize()
+    counts = df.groupby(day, sort=False).size()
+    med = float(counts.median())
+    if not np.isfinite(med) or med < 1.0:
+        return 78.0
+    return med
+
+
+def years_months_to_bars(
+    df: pd.DataFrame,
+    *,
+    is_years: float = 4.0,
+    oos_months: float = 3.0,
+    trading_days_per_year: int = 252,
+) -> tuple[int, int, float]:
+    """
+    Convert in-sample years and OOS months to bar counts using inferred bars/trading-day.
+
+    Convention: ``is_bars ≈ round(is_years * 252 * bpd)``, ``oos_bars ≈ round((oos_months/12)*252*bpd)``.
+    """
+    bpd = infer_bars_per_trading_day(df)
+    is_bars = int(max(1, round(float(is_years) * trading_days_per_year * bpd)))
+    oos_bars = int(max(1, round((float(oos_months) / 12.0) * trading_days_per_year * bpd)))
+    return is_bars, oos_bars, bpd
+
+
+def _row_datetimes(df: pd.DataFrame) -> pd.Series:
+    """One timestamp per row (for CSV / plots), aligned with iloc positions."""
+    return pd.to_datetime(
+        df["Date"].astype(str).str.strip() + " " + df["Time"].astype(str).str.strip(),
+        format="%m/%d/%Y %H:%M",
+        errors="coerce",
+    ).reset_index(drop=True)
+
+
+def optimize_window(
+    train: pd.DataFrame,
+    *,
+    L_grid: np.ndarray | None = None,
+    S_grid: np.ndarray | None = None,
+    bars_back: int = 17001,
+    slpg: float = 47.0,
+    pv: float = 42000.0,
+    e0: float = 100_000.0,
+) -> tuple[int, float, pd.DataFrame]:
+    """
+    Run ``optimize_parameters`` on the in-sample slice only; pick (L, S) by max return_to_dd.
+
+    Returns (best_L, best_S, full_grid_table).
+    """
+    grid = optimize_parameters(
+        train,
+        L_grid=L_grid,
+        S_grid=S_grid,
+        bars_back=bars_back,
+        slpg=slpg,
+        pv=pv,
+        e0=e0,
+        verbose=False,
+    )
+    if grid.empty:
+        raise ValueError("optimize_parameters returned an empty grid.")
+    scores = grid["return_to_dd"].astype(float).replace([np.inf, -np.inf], np.nan)
+    if scores.notna().any():
+        idx = scores.fillna(-np.inf).idxmax()
+    else:
+        idx = grid.index[0]
+    best = grid.loc[idx]
+    return int(best["L"]), float(best["S"]), grid
+
+
+def rolling_backtest(
+    data: pd.DataFrame,
+    *,
+    is_years: float = 4.0,
+    oos_months: float = 3.0,
+    bars_back: int = 17001,
+    slpg: float = 47.0,
+    pv: float = 42000.0,
+    e0: float = 100_000.0,
+    L_grid: np.ndarray | None = None,
+    S_grid: np.ndarray | None = None,
+    trading_days_per_year: int = 252,
+    max_segments: int | None = None,
+) -> dict[str, object]:
+    """
+    Rolling walk-forward OOS backtest (no look-ahead).
+
+    For each step ``split`` (end of IS / start of OOS):
+
+    1. **Train** = rows ``[split - is_bars, split)`` — only this slice is passed to ``optimize_window``.
+    2. **OOS context** = rows ``[split - bars_back, split + oos_bars)`` — length ``bars_back + oos_bars`` so
+       ``run_backtest`` can start trading exactly at global index ``split`` (local index ``bars_back``),
+       using only prices **strictly before** each simulated bar inside OOS (standard causal HH/LL).
+    3. Record OOS segment equity by **chaining dollar PnL** across all OOS bars in order.
+
+    Walk-forward: after each OOS block, ``split += oos_bars`` (next IS ends at new split).
+
+    Returns dict with ``oos_equity`` (DataFrame), ``rolling_parameters`` (DataFrame),
+    ``global_return``, ``global_max_drawdown``, and diagnostic bar counts.
+    """
+    df = data.copy()
+    ok = df["Close"].to_numpy(dtype=float) > 0.0
+    df = df.loc[ok].reset_index(drop=True)
+    n = len(df)
+    is_bars, oos_bars, bpd = years_months_to_bars(
+        df,
+        is_years=is_years,
+        oos_months=oos_months,
+        trading_days_per_year=trading_days_per_year,
+    )
+    bb = int(bars_back)
+    if is_bars <= bb:
+        raise ValueError(
+            f"In-sample window ({is_bars} bars) must exceed warm-up bars_back={bb}."
+        )
+
+    times = _row_datetimes(df)
+    bars_per_year_ann = float(trading_days_per_year) * bpd
+
+    rows: list[dict[str, object]] = []
+    oos_times: list[pd.Timestamp] = []
+    oos_equity: list[float] = []
+
+    split = is_bars
+    seg = 0
+    while split + oos_bars <= n:
+        is0 = split - is_bars
+        train = df.iloc[is0:split]
+        L_best, S_best, _ = optimize_window(
+            train,
+            L_grid=L_grid,
+            S_grid=S_grid,
+            bars_back=bb,
+            slpg=slpg,
+            pv=pv,
+            e0=e0,
+        )
+
+        ctx0 = split - bb
+        ctx1 = split + oos_bars
+        ctx = df.iloc[ctx0:ctx1]
+        out = run_strategy(
+            ctx, L_best, S_best, bars_back=bb, slpg=slpg, pv=pv, e0=e0
+        )
+        E_loc = out["E"]
+        DD_loc = out["DD"]
+        pnl_loc = out["pnl"]
+        trades_loc = out["trades"]
+
+        lo = bb
+        hi = bb + oos_bars
+        E_oos = np.asarray(E_loc[lo:hi], dtype=float)
+        pnl_oos = pnl_loc[lo:hi]
+        trades_oos = trades_loc[lo:hi]
+        # Segment-local drawdown (peak within OOS only); avoids mixing pre-OOS peaks from ctx.
+        peak_oos = np.maximum.accumulate(E_oos)
+        DD_oos = E_oos - peak_oos
+
+        m_oos = compute_metrics(
+            E_oos,
+            DD_oos,
+            trades_oos,
+            pnl_oos,
+            bars_back=0,
+            bars_per_year=bars_per_year_ann,
+        )
+
+        rows.append(
+            {
+                "segment": seg,
+                "train_start": times.iloc[is0],
+                "train_end": times.iloc[split - 1],
+                "oos_start": times.iloc[split],
+                "oos_end": times.iloc[split + oos_bars - 1],
+                "best_L": L_best,
+                "best_S": S_best,
+                "oos_return": m_oos["total_return"],
+                "oos_max_dd": m_oos["max_drawdown"],
+                "oos_return_to_dd": m_oos["return_to_dd_ratio"],
+                "oos_sharpe": m_oos["sharpe_ratio"],
+                "oos_trades": m_oos["total_trades"],
+            }
+        )
+
+        for i in range(oos_bars):
+            oos_times.append(times.iloc[split + i])
+            prev = float(oos_equity[-1]) if oos_equity else float(e0)
+            oos_equity.append(prev + float(pnl_oos[i]))
+
+        split += oos_bars
+        seg += 1
+        if max_segments is not None and seg >= int(max_segments):
+            break
+
+    if not oos_equity:
+        oos_df = pd.DataFrame(columns=["datetime", "equity", "drawdown"])
+        dd_global = pd.Series(dtype=float)
+    else:
+        idx = pd.DatetimeIndex(oos_times)
+        equity_s = pd.Series(oos_equity, index=idx, name="equity")
+        peak = equity_s.cummax()
+        dd_global = equity_s - peak
+        oos_df = pd.DataFrame(
+            {"datetime": equity_s.index, "equity": equity_s.values, "drawdown": dd_global.values}
+        )
+
+    params_df = pd.DataFrame(rows)
+    g_ret = float(oos_equity[-1] - e0) if oos_equity else 0.0
+    g_dd = float(dd_global.min()) if len(dd_global) else 0.0
+
+    return {
+        "oos_equity": oos_df,
+        "rolling_parameters": params_df,
+        "global_return": g_ret,
+        "global_max_drawdown": g_dd,
+        "bars_per_trading_day": bpd,
+        "is_bars": is_bars,
+        "oos_bars": oos_bars,
+        "n_segments": int(seg),
+    }
+
+
+def plot_rolling_oos(
+    oos_equity: pd.DataFrame,
+    *,
+    title_prefix: str = "Rolling OOS",
+    figsize: tuple[float, float] = (11, 7),
+) -> plt.Figure:
+    """Equity and drawdown for the stitched walk-forward OOS path."""
+    fig, axes = plt.subplots(2, 1, figsize=figsize, sharex=True)
+    ax0 = axes[0]
+    ax1 = axes[1]
+    if len(oos_equity) == 0:
+        ax0.set_title(f"{title_prefix} (no OOS bars)")
+        return fig
+    ax0.plot(oos_equity["datetime"], oos_equity["equity"], color="tab:blue", linewidth=0.8)
+    ax0.set_ylabel("Equity")
+    ax0.set_title(f"{title_prefix} - stitched OOS equity")
+    ax0.grid(True, alpha=0.25)
+    ax1.plot(oos_equity["datetime"], oos_equity["drawdown"], color="tab:red", linewidth=0.8)
+    ax1.set_ylabel("Drawdown")
+    ax1.set_xlabel("Time")
+    ax1.set_title("Drawdown (vs running peak)")
+    ax1.grid(True, alpha=0.25)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    return fig
+
+
 def main() -> None:
     data_file = "HO-5minHLV.csv"
     bars_back = 17001
