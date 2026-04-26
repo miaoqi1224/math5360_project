@@ -1,6 +1,9 @@
 ﻿"""
 Week 2 - parameter grid search and sensitivity heatmaps.
 
+Uses PDF full grid (951 x 96) and Group 5 CO contract slippage / point value from
+``group5_config`` (optional ``group5_overrides.json``).
+
 Uses existing strategy code from main.py:
     rolling_hh_ll(), run_backtest() (via run_strategy()).
 
@@ -10,12 +13,15 @@ Run from project folder:
 
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
+from group5_config import PRIMARY_DATA_FILE, SECONDARY_DATA_FILE, contract_slippage_point_value
 from main import (
     load_market_data,
     optimize_parameters,
@@ -33,23 +39,43 @@ def prepare_ohlc_for_backtest(df: pd.DataFrame) -> pd.DataFrame:
 
 def run_week2(
     *,
-    data_file: str = "HO-5minHLV.csv",
+    market: str = "primary",
+    data_file: str | None = None,
+    out_dir: str | Path | None = None,
     out_csv: str = "optimization_results.csv",
     bars_back: int = 17001,
+    fast_grid: bool = False,
 ) -> pd.DataFrame:
-    raw = load_market_data(data_file)
+    csv = data_file or (SECONDARY_DATA_FILE if market == "secondary" else PRIMARY_DATA_FILE)
+    raw = load_market_data(csv)
     data = prepare_ohlc_for_backtest(raw)
 
+    if fast_grid:
+        L_grid = np.arange(500, 3001, 500, dtype=int)
+        S_grid = np.arange(0.005, 0.0251, 0.005, dtype=float)
+        print("Using --fast-grid (subset); for PDF submission use default without this flag.")
+    else:
+        L_grid, S_grid = None, None
+
+    slpg_f, pv_f = contract_slippage_point_value(market)
     results = optimize_parameters(
         data,
+        L_grid=L_grid,
+        S_grid=S_grid,
         bars_back=bars_back,
-        slpg=47.0,
-        pv=42000.0,
+        slpg=slpg_f,
+        pv=pv_f,
         e0=100_000.0,
         verbose=True,
     )
 
-    out_path = Path(__file__).resolve().parent / out_csv
+    if out_dir is not None:
+        base = Path(out_dir)
+    else:
+        sub = "week2_btc" if market == "secondary" else "week2"
+        base = Path(__file__).resolve().parent / "results" / sub
+    base.mkdir(parents=True, exist_ok=True)
+    out_path = base / out_csv
     # Required columns for the assignment table; keep extras for research
     cols_core = ["L", "S", "return", "max_dd", "return_to_dd", "sharpe", "trades"]
     results_sorted = results.sort_values("return_to_dd", ascending=False, na_position="last")
@@ -60,7 +86,8 @@ def run_week2(
         float_format="%.8g",
     )
 
-    best_idx = results["return_to_dd"].idxmax()
+    scores = results["return_to_dd"].astype(float).replace([np.inf, -np.inf], np.nan)
+    best_idx = int(scores.fillna(-np.inf).idxmax())
     best = results.loc[best_idx]
 
     print("\n" + "=" * 72)
@@ -95,4 +122,24 @@ def run_week2(
 
 
 if __name__ == "__main__":
-    run_week2()
+    ap = argparse.ArgumentParser(description="Week 2 grid search (primary CO or secondary BTC).")
+    ap.add_argument(
+        "--market",
+        choices=("primary", "secondary"),
+        default="primary",
+        help="Contract economics from group5_config / overrides for chosen market.",
+    )
+    ap.add_argument("--data", default=None, help="Override CSV path.")
+    ap.add_argument("--out-dir", default=None, help="Output directory (default: results/week2 or week2_btc).")
+    ap.add_argument(
+        "--fast-grid",
+        action="store_true",
+        help="Small L/S grid for development (default = PDF full 951×96 grid).",
+    )
+    args = ap.parse_args()
+    run_week2(
+        market=args.market,
+        data_file=args.data,
+        out_dir=args.out_dir,
+        fast_grid=args.fast_grid,
+    )

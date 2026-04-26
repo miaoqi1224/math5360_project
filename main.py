@@ -11,6 +11,13 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
+from group5_config import (
+    PRIMARY_DATA_FILE,
+    contract_slippage_point_value,
+    default_l_grid_pdf,
+    default_s_grid_pdf,
+)
+
 
 def load_market_data(data_file: str) -> pd.DataFrame:
     """Equivalent to ezread + numTime construction in MATLAB."""
@@ -77,6 +84,7 @@ def run_backtest(
     E = np.zeros(n, dtype=float) + e0
     DD = np.zeros(n, dtype=float)
     trades = np.zeros(n, dtype=float)
+    positions = np.zeros(n, dtype=np.int8)
     emax = float(e0)
 
     position = 0
@@ -167,8 +175,9 @@ def run_backtest(
         E[k] = E[k - 1] + delta
         emax = max(emax, E[k])
         DD[k] = E[k] - emax
+        positions[k] = np.int8(position)
 
-    return E, DD, trades
+    return E, DD, trades, positions
 
 
 # ---------------------------------------------------------------------------
@@ -182,8 +191,8 @@ def run_strategy(
     S: float,
     *,
     bars_back: int = 17001,
-    slpg: float = 47.0,
-    pv: float = 42000.0,
+    slpg: float | None = None,
+    pv: float | None = None,
     e0: float = 100_000.0,
 ) -> dict[str, np.ndarray]:
     """
@@ -203,9 +212,17 @@ def run_strategy(
     close = data["Close"].to_numpy(dtype=float)
     n = len(close)
 
+    if slpg is None or pv is None:
+        ds, dp = contract_slippage_point_value()
+        slpg_f = float(ds if slpg is None else slpg)
+        pv_f = float(dp if pv is None else pv)
+    else:
+        slpg_f = float(slpg)
+        pv_f = float(pv)
+
     hh, ll = rolling_hh_ll(high, low, int(L))
-    E, DD, trades = run_backtest(
-        high, low, close, hh, ll, float(S), int(bars_back), float(slpg), float(pv), float(e0)
+    E, DD, trades, positions = run_backtest(
+        high, low, close, hh, ll, float(S), int(bars_back), slpg_f, pv_f, float(e0)
     )
 
     pnl = np.zeros(n, dtype=float)
@@ -213,7 +230,7 @@ def run_strategy(
     if bb < n:
         pnl[bb:] = E[bb:] - E[bb - 1 : n - 1]
 
-    return {"E": E, "DD": DD, "trades": trades, "pnl": pnl}
+    return {"E": E, "DD": DD, "trades": trades, "pnl": pnl, "positions": positions}
 
 
 def compute_metrics(
@@ -285,32 +302,42 @@ def optimize_parameters(
     L_grid: np.ndarray | None = None,
     S_grid: np.ndarray | None = None,
     bars_back: int = 17001,
-    slpg: float = 47.0,
-    pv: float = 42000.0,
+    slpg: float | None = None,
+    pv: float | None = None,
     e0: float = 100_000.0,
     verbose: bool = True,
 ) -> pd.DataFrame:
     """
     Grid search over (L, S). Each cell calls run_strategy + compute_metrics.
 
-    Default grids (Week 2 spec):
-        L: 500 .. 10000 step 500
-        S: 0.005 .. 0.05 step 0.005
+    Default grids (Final Project PDF, Group 5):
+        ChnLen L: 500 .. 10_000 step 10 (951 points)
+        StpPct S: 0.005 .. 0.100 step 0.001 (96 points)
     """
+    if slpg is None or pv is None:
+        ds, dp = contract_slippage_point_value()
+        slpg_f = float(ds if slpg is None else slpg)
+        pv_f = float(dp if pv is None else pv)
+    else:
+        slpg_f = float(slpg)
+        pv_f = float(pv)
+
     if L_grid is None:
-        L_grid = np.arange(500, 10_000 + 1, 500, dtype=int)
+        L_grid = default_l_grid_pdf()
     if S_grid is None:
-        S_grid = np.arange(0.005, 0.0501, 0.005, dtype=float)
+        S_grid = default_s_grid_pdf()
 
     rows: list[dict[str, float | int]] = []
     nL, nS = len(L_grid), len(S_grid)
+    if verbose:
+        print(f"Parameter grid: {nL} x {nS} = {nL * nS} evaluations (PDF ChnLen x StpPct).")
 
     for i, L in enumerate(L_grid):
-        if verbose:
-            print(f"Grid row {i + 1}/{nL}: L = {L}")
+        if verbose and (i == 0 or (i + 1) % max(1, nL // 20) == 0 or i == nL - 1):
+            print(f"Grid progress: row {i + 1}/{nL} (L = {L})")
         for S in S_grid:
             out = run_strategy(
-                data, int(L), float(S), bars_back=bars_back, slpg=slpg, pv=pv, e0=e0
+                data, int(L), float(S), bars_back=bars_back, slpg=slpg_f, pv=pv_f, e0=e0
             )
             m = compute_metrics(
                 out["E"],
@@ -487,6 +514,99 @@ def years_months_to_bars(
     return is_bars, oos_bars, bpd
 
 
+def extract_oos_completed_trades(
+    E: np.ndarray,
+    positions: np.ndarray,
+    times_ctx: pd.Series,
+    *,
+    ctx_global_start: int,
+    lo: int,
+    hi: int,
+    segment: int,
+) -> list[dict[str, object]]:
+    """
+    Round-turns closed on bars ``lo .. hi-1`` (OOS window in ctx-local indices).
+
+    Uses post-bar equity ``E`` and ``positions[k]`` = position after bar *k* closes.
+    """
+    rows_out: list[dict[str, object]] = []
+    open_k: int | None = None
+    open_E: float | None = None
+    open_side = 0
+
+    def close_leg(exit_k: int, closed_side: int) -> None:
+        nonlocal open_k, open_E, open_side
+        assert open_k is not None and open_E is not None
+        pnl = float(E[exit_k] - open_E)
+        rows_out.append(
+            {
+                "segment": int(segment),
+                "entry_bar_global": int(ctx_global_start + open_k),
+                "exit_bar_global": int(ctx_global_start + exit_k),
+                "entry_time": times_ctx.iloc[open_k],
+                "exit_time": times_ctx.iloc[exit_k],
+                "direction_closed": "long" if closed_side == 1 else "short",
+                "pnl_usd": pnl,
+            }
+        )
+        open_k = None
+        open_E = None
+        open_side = 0
+
+    prev = int(positions[lo - 1]) if lo > 0 else 0
+    for k in range(lo, hi):
+        cur = int(positions[k])
+        if cur != prev:
+            if prev == 1 and cur == 0:
+                close_leg(k, 1)
+            elif prev == -1 and cur == 0:
+                close_leg(k, -1)
+            elif prev == 1 and cur == -1:
+                close_leg(k, 1)
+                open_k, open_E, open_side = k, float(E[k]), -1
+            elif prev == -1 and cur == 1:
+                close_leg(k, -1)
+                open_k, open_E, open_side = k, float(E[k]), 1
+            elif prev == 0 and cur == 1:
+                open_k, open_E, open_side = k, float(E[k]), 1
+            elif prev == 0 and cur == -1:
+                open_k, open_E, open_side = k, float(E[k]), -1
+        prev = cur
+
+    return rows_out
+
+
+def trade_based_performance_stats(trade_pnls: list[float]) -> dict[str, float]:
+    """Profit factor, avg winner/loser, win rate on completed round-turns."""
+    if not trade_pnls:
+        return {
+            "n_trades": 0.0,
+            "win_rate_trades": float("nan"),
+            "avg_winner": float("nan"),
+            "avg_loser": float("nan"),
+            "profit_factor": float("nan"),
+        }
+    arr = np.asarray(trade_pnls, dtype=float)
+    wins = arr[arr > 0.0]
+    losses = arr[arr < 0.0]
+    n = float(arr.size)
+    win_rate = float(np.sum(arr > 0.0) / n) if n else float("nan")
+    avg_w = float(np.mean(wins)) if wins.size else float("nan")
+    avg_l = float(np.mean(losses)) if losses.size else float("nan")
+    sw, sl = float(np.sum(wins)), float(np.sum(losses))
+    if sl < 0.0:
+        pf = sw / abs(sl)
+    else:
+        pf = float("inf") if sw > 0.0 else float("nan")
+    return {
+        "n_trades": n,
+        "win_rate_trades": win_rate,
+        "avg_winner": avg_w,
+        "avg_loser": avg_l,
+        "profit_factor": pf,
+    }
+
+
 def _row_datetimes(df: pd.DataFrame) -> pd.Series:
     """One timestamp per row (for CSV / plots), aligned with iloc positions."""
     return pd.to_datetime(
@@ -502,8 +622,8 @@ def optimize_window(
     L_grid: np.ndarray | None = None,
     S_grid: np.ndarray | None = None,
     bars_back: int = 17001,
-    slpg: float = 47.0,
-    pv: float = 42000.0,
+    slpg: float | None = None,
+    pv: float | None = None,
     e0: float = 100_000.0,
 ) -> tuple[int, float, pd.DataFrame]:
     """
@@ -538,8 +658,8 @@ def rolling_backtest(
     is_years: float = 4.0,
     oos_months: float = 3.0,
     bars_back: int = 17001,
-    slpg: float = 47.0,
-    pv: float = 42000.0,
+    slpg: float | None = None,
+    pv: float | None = None,
     e0: float = 100_000.0,
     L_grid: np.ndarray | None = None,
     S_grid: np.ndarray | None = None,
@@ -560,8 +680,16 @@ def rolling_backtest(
     Walk-forward: after each OOS block, ``split += oos_bars`` (next IS ends at new split).
 
     Returns dict with ``oos_equity`` (DataFrame), ``rolling_parameters`` (DataFrame),
-    ``global_return``, ``global_max_drawdown``, and diagnostic bar counts.
+    ``oos_trades`` (completed round-turns whose exit falls in OOS), ``global_return``,
+    ``global_max_drawdown``, and diagnostic bar counts.
     """
+    if slpg is None or pv is None:
+        ds, dp = contract_slippage_point_value()
+        slpg_f = float(ds if slpg is None else slpg)
+        pv_f = float(dp if pv is None else pv)
+    else:
+        slpg_f, pv_f = float(slpg), float(pv)
+
     df = data.copy()
     ok = df["Close"].to_numpy(dtype=float) > 0.0
     df = df.loc[ok].reset_index(drop=True)
@@ -582,6 +710,7 @@ def rolling_backtest(
     bars_per_year_ann = float(trading_days_per_year) * bpd
 
     rows: list[dict[str, object]] = []
+    all_trade_rows: list[dict[str, object]] = []
     oos_times: list[pd.Timestamp] = []
     oos_equity: list[float] = []
 
@@ -595,8 +724,8 @@ def rolling_backtest(
             L_grid=L_grid,
             S_grid=S_grid,
             bars_back=bb,
-            slpg=slpg,
-            pv=pv,
+            slpg=slpg_f,
+            pv=pv_f,
             e0=e0,
         )
 
@@ -604,12 +733,13 @@ def rolling_backtest(
         ctx1 = split + oos_bars
         ctx = df.iloc[ctx0:ctx1]
         out = run_strategy(
-            ctx, L_best, S_best, bars_back=bb, slpg=slpg, pv=pv, e0=e0
+            ctx, L_best, S_best, bars_back=bb, slpg=slpg_f, pv=pv_f, e0=e0
         )
         E_loc = out["E"]
         DD_loc = out["DD"]
         pnl_loc = out["pnl"]
         trades_loc = out["trades"]
+        positions_loc = out["positions"]
 
         lo = bb
         hi = bb + oos_bars
@@ -629,6 +759,20 @@ def rolling_backtest(
             bars_per_year=bars_per_year_ann,
         )
 
+        times_ctx = times.iloc[ctx0:ctx1].reset_index(drop=True)
+        seg_trades = extract_oos_completed_trades(
+            E_loc,
+            positions_loc,
+            times_ctx,
+            ctx_global_start=ctx0,
+            lo=lo,
+            hi=hi,
+            segment=seg,
+        )
+        all_trade_rows.extend(seg_trades)
+        t_pnls = [float(t["pnl_usd"]) for t in seg_trades]
+        tb = trade_based_performance_stats(t_pnls)
+
         rows.append(
             {
                 "segment": seg,
@@ -643,6 +787,11 @@ def rolling_backtest(
                 "oos_return_to_dd": m_oos["return_to_dd_ratio"],
                 "oos_sharpe": m_oos["sharpe_ratio"],
                 "oos_trades": m_oos["total_trades"],
+                "oos_n_trades_roundturn": tb["n_trades"],
+                "oos_win_rate_trades": tb["win_rate_trades"],
+                "oos_avg_winner": tb["avg_winner"],
+                "oos_avg_loser": tb["avg_loser"],
+                "oos_profit_factor": tb["profit_factor"],
             }
         )
 
@@ -669,12 +818,14 @@ def rolling_backtest(
         )
 
     params_df = pd.DataFrame(rows)
+    trades_df = pd.DataFrame(all_trade_rows) if all_trade_rows else pd.DataFrame()
     g_ret = float(oos_equity[-1] - e0) if oos_equity else 0.0
     g_dd = float(dd_global.min()) if len(dd_global) else 0.0
 
     return {
         "oos_equity": oos_df,
         "rolling_parameters": params_df,
+        "oos_trades": trades_df,
         "global_return": g_ret,
         "global_max_drawdown": g_dd,
         "bars_per_trading_day": bpd,
@@ -712,14 +863,14 @@ def plot_rolling_oos(
 
 
 def main() -> None:
-    data_file = "HO-5minHLV.csv"
+    data_file = PRIMARY_DATA_FILE
     bars_back = 17001
-    slpg = 47.0
-    pv = 42000.0
+    slpg, pv = contract_slippage_point_value()
     e0 = 100000.0
 
-    in_sample = (datetime_from_mdy("01/01/1980"), datetime_from_mdy("01/01/2000"))
-    out_sample = (datetime_from_mdy("01/01/2000"), datetime_from_mdy("03/23/2023"))
+    # CO (Brent) sample here begins ~Aug 2003; splits follow same IS/OOS idea as the MATLAB demo.
+    in_sample = (datetime_from_mdy("01/01/2006"), datetime_from_mdy("01/01/2018"))
+    out_sample = (datetime_from_mdy("01/01/2018"), datetime_from_mdy("04/10/2026"))
 
     length_grid = np.arange(12700, 12701, 100, dtype=int)
     stop_pct_grid = np.arange(0.010, 0.011, 0.001, dtype=float)
@@ -751,11 +902,23 @@ def main() -> None:
     # MATLAB: max(sum(d.numTime<inSample(1))+1, barsBack) — 1-based
     ind_in_sample_1_m = max(count_before(in_sample[0]) + 1, bars_back)
     ind_in_sample_2_m = max(
-        int(np.sum(num_time < matlab_datenum_day_offset("01/01/2000", 1.0))), bars_back
+        int(
+            np.sum(
+                num_time
+                < matlab_datenum_day_offset(in_sample[1].strftime("%m/%d/%Y"), 1.0)
+            )
+        ),
+        bars_back,
     )
     ind_out_sample_1_m = max(count_before(out_sample[0]) + 1, bars_back)
     ind_out_sample_2_m = max(
-        int(np.sum(num_time < matlab_datenum_day_offset("03/23/2023", 1.0))), bars_back
+        int(
+            np.sum(
+                num_time
+                < matlab_datenum_day_offset(out_sample[1].strftime("%m/%d/%Y"), 1.0)
+            )
+        ),
+        bars_back,
     )
 
     ind_in_sample_1 = ind_in_sample_1_m - 1
@@ -768,7 +931,7 @@ def main() -> None:
         hh_L, ll_L = rolling_hh_ll(high, low, int(L))
 
         for j, S in enumerate(stop_pct_grid):
-            E, DD, trades = run_backtest(
+            E, DD, trades, _ = run_backtest(
                 high, low, close, hh_L, ll_L, float(S), bars_back, slpg, pv, e0
             )
 
@@ -801,7 +964,7 @@ def main() -> None:
     S_plot = float(stop_pct_grid[-1])
     L_plot = int(length_grid[-1])
     hh, ll = rolling_hh_ll(high, low, L_plot)
-    E_out, _, trades_out = run_backtest(
+    E_out, _, trades_out, _ = run_backtest(
         high, low, close, hh, ll, S_plot, bars_back, slpg, pv, e0
     )
 

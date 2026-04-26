@@ -421,6 +421,7 @@ def run_week1_pipeline(
     vr_lags: tuple[int, ...] = (2, 4, 8, 16, 32),
     push_horizons: tuple[int, ...] = (1, 5, 10, 20),
     show_plots: bool = True,
+    figures_dir: Path | str | None = None,
 ) -> dict:
     """
     End-to-end Week 1 analysis. Returns dict of key tables/series for notebooks.
@@ -454,7 +455,9 @@ def run_week1_pipeline(
         backend = plt.matplotlib.get_backend().lower()
         env_agg = os.environ.get("MPLBACKEND", "").lower() == "agg"
         non_interactive = env_agg or ("agg" in backend)
-        out_dir = Path(__file__).resolve().parent
+        # Default: primary CO under results/week1; pass ``figures_dir`` for secondary (e.g. results/week1_btc).
+        out_dir = Path(figures_dir) if figures_dir is not None else Path(__file__).resolve().parent / "results" / "week1"
+        out_dir.mkdir(parents=True, exist_ok=True)
         if non_interactive:
             fig1.savefig(out_dir / "week1_fig1_prices_returns.png", dpi=160)
             fig2.savefig(out_dir / "week1_fig2_variance_ratio.png", dpi=160)
@@ -475,8 +478,29 @@ def run_week1_pipeline(
 
 
 if __name__ == "__main__":
-    # Example: load bundled HO data (same folder). Replace with your DataFrame in notebooks.
-    csv_path = "HO-5minHLV.csv"
+    import argparse
+
+    from group5_config import PRIMARY_DATA_FILE, SECONDARY_DATA_FILE
+
+    ap = argparse.ArgumentParser(description="Week 1 time-series diagnostics (VR + push-response).")
+    ap.add_argument(
+        "--market",
+        choices=("primary", "secondary"),
+        default="primary",
+        help="primary=CO, secondary=BTC (uses SECONDARY_DATA_FILE from group5_config).",
+    )
+    ap.add_argument("--data", default=None, help="Override CSV path (optional).")
+    ap.add_argument(
+        "--figures-dir",
+        default=None,
+        help="Directory for PNG outputs when headless (default: results/week1 or results/week1_btc).",
+    )
+    args = ap.parse_args()
+    csv_path = args.data or (SECONDARY_DATA_FILE if args.market == "secondary" else PRIMARY_DATA_FILE)
+    fig_dir = args.figures_dir
+    if fig_dir is None:
+        fig_dir = Path(__file__).resolve().parent / "results" / ("week1_btc" if args.market == "secondary" else "week1")
+
     raw = pd.read_csv(csv_path, usecols=["Date", "Time", "Open", "High", "Low", "Close"])
-    results = run_week1_pipeline(raw, show_plots=True)
+    results = run_week1_pipeline(raw, show_plots=True, figures_dir=fig_dir)
     print("\nDone. Keys returned:", list(results.keys()))

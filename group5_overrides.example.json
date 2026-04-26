@@ -1,0 +1,9 @@
+{
+  "_readme": "Copy to group5_overrides.json. Top-level slpg/pv = primary CO. Optional secondary = BTC. Values below reflect instructor-provided project settings.",
+  "slpg": 48.0,
+  "pv": 1000.0,
+  "secondary": {
+    "slpg": 25.0,
+    "pv": 25.0
+  }
+}

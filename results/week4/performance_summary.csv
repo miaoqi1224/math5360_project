@@ -1,0 +1,13 @@
+metric,value
+total_return,33558.200000000186
+max_drawdown,-17994.800000000047
+mean_bar_pnl,0.672562930896268
+std_bar_pnl,110.62585485986699
+annualized_mean_bar_pnl,11186.06666666673
+annualized_std_bar_pnl,14266.875713558971
+sharpe_ratio,0.7840586047886926
+win_rate,0.3424657534246575
+average_win,1376.9013333333285
+average_loss,-784.2319444444432
+profit_factor,0.9144438914932675
+total_number_of_trades,219.0

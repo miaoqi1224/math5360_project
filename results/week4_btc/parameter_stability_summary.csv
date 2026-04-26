@@ -1,0 +1,8 @@
+metric,value
+n_windows,2.0
+L_mean,500.0
+L_std,0.0
+S_mean,0.01
+S_std,0.0
+L_nunique,1.0
+S_nunique,1.0
