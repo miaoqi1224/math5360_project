@@ -1,0 +1,2 @@
+market,data_file,best_L,best_S,grid_best_return_to_dd,fullsample_total_return,fullsample_max_drawdown,fullsample_sharpe_ratio,fullsample_total_trades
+secondary,BTC-5minHLV.csv,500,0.005,18.308898526626205,1602088.1250000044,-87503.25,2.0148935338132605,5797.0
