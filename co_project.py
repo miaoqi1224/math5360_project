@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -555,8 +554,6 @@ def run_market(ticker: str) -> pd.DataFrame:
 
 
 def main() -> None:
-    if OUTPUT_DIR.exists():
-        shutil.rmtree(OUTPUT_DIR)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     comparison = pd.concat([run_market(ticker) for ticker in MARKETS], ignore_index=True)
