@@ -1,16 +1,16 @@
-Horizon,VR,VR robust p,VR signal,PR beta,PR beta p,Signed response (bp),PR signal,Joint reading
-5 min,1.0000,n/a,baseline,-0.0249,<0.001,-0.466,mean-reverting,push-response only: mean-reverting
-10 min,0.9751,<0.001,mean-reverting,-0.0229,<0.001,-0.719,mean-reverting,mean-reverting
-15 min,0.9567,<0.001,mean-reverting,-0.0270,<0.001,-1.007,mean-reverting,mean-reverting
-30 min,0.9419,<0.001,mean-reverting,-0.0125,<0.001,-0.970,mean-reverting,mean-reverting
-1.0 hr,0.9314,<0.001,mean-reverting,-0.0192,<0.001,-0.875,mean-reverting,mean-reverting
-2.0 hr,0.9166,<0.001,mean-reverting,-0.0084,0.188,1.001,not significant,weak mean-reverting
-4.0 hr,0.9040,<0.001,mean-reverting,-0.0132,0.143,-1.290,not significant,weak mean-reverting
-8.0 hr,0.8905,0.001,mean-reverting,0.0189,0.139,5.275,not significant,weak mean-reverting
-16.0 hr,0.8965,0.018,mean-reverting,0.0318,0.078,7.578,not significant,weak mean-reverting
-32.0 hr (~1.3 days),0.8959,0.073,not significant,0.0010,0.967,5.894,not significant,no clear inefficiency
-64.0 hr (~2.7 days),0.8863,0.137,not significant,0.0286,0.428,19.270,not significant,no clear inefficiency
-128.0 hr (~5.3 days),0.9124,0.381,not significant,0.0486,0.340,12.359,not significant,no clear inefficiency
-256.0 hr (~10.7 days),0.9234,0.556,not significant,-0.0357,0.620,158.426,not significant,no clear inefficiency
-512.0 hr (~21.3 days),0.9712,0.865,not significant,0.1758,0.077,365.743,not significant,no clear inefficiency
-833.3 hr (~34.7 days),1.0203,0.922,not significant,0.1216,0.322,56.547,not significant,no clear inefficiency
+Horizon,VR,VR robust p,VR signal,PR beta,PR beta p,PR signal,Joint reading
+5 min,1.0000,n/a,baseline,-0.0249,<0.001,mean-reverting,push-response only: mean-reverting
+10 min,0.9751,<0.001,mean-reverting,-0.0229,<0.001,mean-reverting,mean-reverting
+15 min,0.9567,<0.001,mean-reverting,-0.0270,<0.001,mean-reverting,mean-reverting
+30 min,0.9419,<0.001,mean-reverting,-0.0125,<0.001,mean-reverting,mean-reverting
+1.0 hr,0.9314,<0.001,mean-reverting,-0.0192,<0.001,mean-reverting,mean-reverting
+2.0 hr,0.9166,<0.001,mean-reverting,-0.0084,0.188,not significant,weak mean-reverting
+4.0 hr,0.9040,<0.001,mean-reverting,-0.0132,0.143,not significant,weak mean-reverting
+8.0 hr,0.8905,0.001,mean-reverting,0.0189,0.139,not significant,weak mean-reverting
+16.0 hr,0.8965,0.018,mean-reverting,0.0318,0.078,not significant,weak mean-reverting
+32.0 hr (~1.3 days),0.8959,0.073,not significant,0.0010,0.967,not significant,no clear inefficiency
+64.0 hr (~2.7 days),0.8863,0.137,not significant,0.0286,0.428,not significant,no clear inefficiency
+128.0 hr (~5.3 days),0.9124,0.381,not significant,0.0486,0.340,not significant,no clear inefficiency
+256.0 hr (~10.7 days),0.9234,0.556,not significant,-0.0357,0.620,not significant,no clear inefficiency
+512.0 hr (~21.3 days),0.9712,0.865,not significant,0.1758,0.077,not significant,no clear inefficiency
+833.3 hr (~34.7 days),1.0203,0.922,not significant,0.1216,0.322,not significant,no clear inefficiency

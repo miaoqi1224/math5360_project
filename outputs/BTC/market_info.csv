@@ -1,0 +1,2 @@
+ticker,name,exchange,currency,point_value,tick_size,tick_value,slippage,bars,sample_start,sample_end
+BTC,CME Bitcoin,CME,USD,5.0,1.0,5.0,25.0,590436,2017-12-18 00:35:00,2026-04-10 16:00:00

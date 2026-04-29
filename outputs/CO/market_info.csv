@@ -1,0 +1,2 @@
+ticker,name,exchange,currency,point_value,tick_size,tick_value,slippage,bars,sample_start,sample_end
+CO,Brent Crude,ICE,USD,1000.0,0.01,10.0,48.0,384306,2003-08-01 14:05:00,2026-04-10 19:30:00

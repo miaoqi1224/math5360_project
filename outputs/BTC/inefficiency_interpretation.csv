@@ -1,0 +1,4 @@
+ticker,signal_type,time_scale
+BTC,mean_reversion,5 min to 16.0 hr
+BTC,trend_following,
+BTC,no_clear_inefficiency,32.0 hr (~1.3 days) to 833.3 hr (~34.7 days)
