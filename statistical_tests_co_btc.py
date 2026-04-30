@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# Subgroup 3 main file: CO and BTC statistical tests.
+
 import math
 from dataclasses import dataclass
 from pathlib import Path
