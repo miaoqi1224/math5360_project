@@ -1,0 +1,4 @@
+Statistical testing outputs for Subgroup 3:
+- Variance Ratio tests
+- Push-Response tests
+- CO vs BTC inefficiency time-scale summary
