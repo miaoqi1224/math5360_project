@@ -2,20 +2,12 @@ from __future__ import annotations
 
 # Subgroup 3 main file: CO and BTC statistical tests.
 
-import math
 from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-
-try:
-    from scipy import signal as scipy_signal
-    from scipy import stats as scipy_stats
-except Exception:  # pragma: no cover
-    scipy_signal = None
-    scipy_stats = None
 
 try:
     import xlrd
@@ -28,10 +20,17 @@ TF_DATA_FILE = PROJECT_DIR / "TF Data.xls"
 OUTPUT_DIR = PROJECT_DIR / "outputs"
 
 MARKETS = ("CO", "BTC")
-SIGNIFICANCE_LEVEL = 0.05
+BASE_BAR_MINUTES = 5
 
-# 5-minute bars. Horizons cover short intraday through multi-day scales.
-TEST_HORIZONS = (1, 2, 3, 6, 12, 24, 48, 96, 192, 384, 768, 1536, 3072, 6144, 10000)
+VR_BASE_HORIZONS = (1, 6, 12)  # 5 min, 30 min, 1 hr base shifts
+VR_Q_MULTIPLES = (1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 192)
+
+PR_HORIZONS = (1, 2, 3, 6, 12, 24, 48, 96, 192)
+PR_PLOT_HORIZONS = (1, 3, 12)
+PR_BINS = 11
+PR_TRIM = 0.005
+MIN_BIN_COUNT = 50
+SIGNAL_TOLERANCE = 0.01
 
 
 @dataclass(frozen=True)
@@ -98,29 +97,8 @@ def load_price_data(path: Path) -> pd.DataFrame:
     return df.sort_values("DateTime").reset_index(drop=True)
 
 
-def normal_two_sided_p(z_value: float) -> float:
-    if not np.isfinite(z_value):
-        return float("nan")
-    return float(math.erfc(abs(z_value) / math.sqrt(2.0)))
-
-
-def t_two_sided_p(t_value: float, degrees_of_freedom: int) -> float:
-    if not np.isfinite(t_value) or degrees_of_freedom <= 0:
-        return float("nan")
-    if scipy_stats is not None:
-        return float(2.0 * scipy_stats.t.sf(abs(t_value), degrees_of_freedom))
-    return normal_two_sided_p(t_value)
-
-
-def p_label(p_value: float) -> str:
-    if not np.isfinite(p_value):
-        return "n/a"
-    if p_value < 0.001:
-        return "<0.001"
-    return f"{p_value:.3f}"
-
-
-def horizon_label(minutes: float) -> str:
+def horizon_label(bars: int) -> str:
+    minutes = bars * BASE_BAR_MINUTES
     if minutes < 60:
         return f"{minutes:.0f} min"
     hours = minutes / 60.0
@@ -129,384 +107,333 @@ def horizon_label(minutes: float) -> str:
     return f"{hours:.1f} hr (~{hours / 24.0:.1f} days)"
 
 
-def signal_label(effect: float, p_value: float, baseline: bool = False) -> str:
-    if baseline:
-        return "baseline"
-    if not np.isfinite(effect) or not np.isfinite(p_value):
+def price_change(close: np.ndarray, bars: int) -> np.ndarray:
+    return close[bars:] - close[:-bars]
+
+
+def direction_label(value: float, tolerance: float = SIGNAL_TOLERANCE) -> str:
+    if not np.isfinite(value):
         return "insufficient data"
-    if p_value >= SIGNIFICANCE_LEVEL:
-        return "not significant"
-    if effect > 0:
-        return "trend-following"
-    if effect < 0:
+    if abs(value) <= tolerance:
+        return "no clear"
+    if value < 0:
         return "mean-reverting"
-    return "not significant"
+    return "trend-following"
 
 
-def log_returns(close: np.ndarray) -> np.ndarray:
-    return np.diff(np.log(close))
-
-
-def robust_vr_delta_lags(returns: np.ndarray, max_lag: int) -> np.ndarray:
-    if max_lag <= 0:
-        return np.array([], dtype=float)
-
-    centered = returns - np.mean(returns)
-    squared = centered**2
-    denom = float(np.sum(squared) ** 2)
-    if denom <= 0:
-        return np.full(max_lag, np.nan, dtype=float)
-
-    if scipy_signal is not None and max_lag > 128:
-        autocorr = scipy_signal.correlate(squared, squared, mode="full", method="fft")
-        center = len(squared) - 1
-        return autocorr[center + 1 : center + max_lag + 1] / denom
-
-    return np.array(
-        [float(np.sum(squared[lag:] * squared[:-lag]) / denom) for lag in range(1, max_lag + 1)]
-    )
-
-
-def variance_ratio_row(returns: np.ndarray, q: int, delta_lags: np.ndarray) -> dict[str, float | int | str]:
-    if q <= 0 or len(returns) <= q:
-        return {
-            "n_observations": len(returns),
-            "variance_ratio": float("nan"),
-            "vr_minus_1": float("nan"),
-            "vr_z_homoskedastic": float("nan"),
-            "vr_p_homoskedastic": float("nan"),
-            "vr_z_heteroskedastic": float("nan"),
-            "vr_p_heteroskedastic": float("nan"),
-            "vr_interpretation": "insufficient data",
-        }
-
-    if q == 1:
-        return {
-            "n_observations": len(returns),
-            "variance_ratio": 1.0,
-            "vr_minus_1": 0.0,
-            "vr_z_homoskedastic": float("nan"),
-            "vr_p_homoskedastic": float("nan"),
-            "vr_z_heteroskedastic": float("nan"),
-            "vr_p_heteroskedastic": float("nan"),
-            "vr_interpretation": "baseline",
-        }
-
-    var_1 = np.var(returns, ddof=1)
-    if var_1 <= 0:
-        return {
-            "n_observations": len(returns),
-            "variance_ratio": float("nan"),
-            "vr_minus_1": float("nan"),
-            "vr_z_homoskedastic": float("nan"),
-            "vr_p_homoskedastic": float("nan"),
-            "vr_z_heteroskedastic": float("nan"),
-            "vr_p_heteroskedastic": float("nan"),
-            "vr_interpretation": "insufficient data",
-        }
-
-    cumulative = np.concatenate(([0.0], np.cumsum(returns)))
-    q_returns = cumulative[q:] - cumulative[:-q]
-    variance_ratio = float(np.var(q_returns, ddof=1) / (q * var_1))
-    vr_minus_1 = variance_ratio - 1.0
-
-    n = len(returns)
-    phi = 2.0 * (2.0 * q - 1.0) * (q - 1.0) / (3.0 * q * n)
-    z_homo = vr_minus_1 / math.sqrt(phi) if phi > 0 else float("nan")
-    p_homo = normal_two_sided_p(z_homo)
-
-    lags = np.arange(1, q, dtype=float)
-    weights = 2.0 * (q - lags) / q
-    theta = float(np.sum((weights**2) * delta_lags[: q - 1]))
-    z_hetero = vr_minus_1 / math.sqrt(theta) if theta > 0 else float("nan")
-    p_hetero = normal_two_sided_p(z_hetero)
-
-    return {
-        "n_observations": n,
-        "variance_ratio": variance_ratio,
-        "vr_minus_1": vr_minus_1,
-        "vr_z_homoskedastic": z_homo,
-        "vr_p_homoskedastic": p_homo,
-        "vr_z_heteroskedastic": z_hetero,
-        "vr_p_heteroskedastic": p_hetero,
-        "vr_interpretation": signal_label(vr_minus_1, p_hetero),
-    }
-
-
-def run_variance_ratio(df: pd.DataFrame) -> pd.DataFrame:
-    returns = log_returns(df["Close"].to_numpy(dtype=float))
-    delta_lags = robust_vr_delta_lags(returns, max(TEST_HORIZONS) - 1)
-    rows = []
-    for q in TEST_HORIZONS:
-        rows.append(
-            {
-                "horizon_bars": q,
-                "horizon_minutes": q * 5,
-                "horizon_label": horizon_label(q * 5),
-                **variance_ratio_row(returns, q, delta_lags),
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def push_response_row(log_close: np.ndarray, q: int) -> dict[str, float | int | str]:
-    pushes = log_close[q::q] - log_close[:-q:q]
-    responses = log_close[2 * q :: q] - log_close[q:-q:q]
-
-    n = min(len(pushes), len(responses))
-    x = pushes[:n].astype(float)
-    y = responses[:n].astype(float)
-    if n < 3:
-        return {
-            "n_push_response_pairs": n,
-            "beta": float("nan"),
-            "beta_t_stat": float("nan"),
-            "beta_p_value": float("nan"),
-            "correlation": float("nan"),
-            "r_squared": float("nan"),
-            "signed_response": float("nan"),
-            "signed_response_bps": float("nan"),
-            "signed_response_t_stat": float("nan"),
-            "signed_response_p_value": float("nan"),
-            "pr_interpretation": "insufficient data",
-        }
-
-    x_centered = x - np.mean(x)
-    y_centered = y - np.mean(y)
-    ssx = float(np.sum(x_centered**2))
-    ssy = float(np.sum(y_centered**2))
-
-    if ssx > 0:
-        cov_xy = float(np.sum(x_centered * y_centered))
-        beta = cov_xy / ssx
-        intercept = float(np.mean(y) - beta * np.mean(x))
-        residuals = y - (intercept + beta * x)
-        residual_var = float(np.sum(residuals**2) / (n - 2))
-        beta_se = math.sqrt(residual_var / ssx) if residual_var >= 0 else float("nan")
-        beta_t = beta / beta_se if beta_se > 0 else float("nan")
-        beta_p = t_two_sided_p(beta_t, n - 2)
-        corr = cov_xy / math.sqrt(ssx * ssy) if ssy > 0 else float("nan")
-        r_squared = corr**2 if np.isfinite(corr) else float("nan")
-    else:
-        beta = beta_t = beta_p = corr = r_squared = float("nan")
-
-    signed_samples = np.sign(x) * y
-    signed_response = float(np.mean(signed_samples))
-    signed_std = float(np.std(signed_samples, ddof=1))
-    signed_t = signed_response / (signed_std / math.sqrt(n)) if signed_std > 0 else float("nan")
-    signed_p = t_two_sided_p(signed_t, n - 1)
-
-    return {
-        "n_push_response_pairs": n,
-        "beta": beta,
-        "beta_t_stat": beta_t,
-        "beta_p_value": beta_p,
-        "correlation": corr,
-        "r_squared": r_squared,
-        "signed_response": signed_response,
-        "signed_response_bps": signed_response * 10000.0,
-        "signed_response_t_stat": signed_t,
-        "signed_response_p_value": signed_p,
-        "pr_interpretation": signal_label(beta, beta_p),
-    }
-
-
-def run_push_response(df: pd.DataFrame) -> pd.DataFrame:
-    log_close = np.log(df["Close"].to_numpy(dtype=float))
-    rows = []
-    for q in TEST_HORIZONS:
-        rows.append(
-            {
-                "horizon_bars": q,
-                "horizon_minutes": q * 5,
-                "horizon_label": horizon_label(q * 5),
-                **push_response_row(log_close, q),
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def combine_tests(vr_df: pd.DataFrame, pr_df: pd.DataFrame) -> pd.DataFrame:
-    merged = vr_df.merge(pr_df, on=("horizon_bars", "horizon_minutes"), suffixes=("_vr", "_pr"))
-    merged["horizon_label"] = merged["horizon_label_vr"]
-    merged = merged.drop(columns=["horizon_label_vr", "horizon_label_pr"])
-
-    def classify(row: pd.Series) -> str:
-        vr = row["vr_interpretation"]
-        pr = row["pr_interpretation"]
-        directional = {"trend-following", "mean-reverting"}
-        if vr == "baseline":
-            return f"push-response only: {pr}" if pr in directional else "baseline"
-        if vr == pr and vr in directional:
-            return vr
-        if vr in directional and pr == "not significant":
-            return f"weak {vr}"
-        if pr in directional and vr == "not significant":
-            return f"weak {pr}"
-        if vr == "not significant" and pr == "not significant":
-            return "no clear inefficiency"
+def joint_label(vr_signal: str, pr_signal: str) -> str:
+    directional = {"mean-reverting", "trend-following"}
+    if vr_signal == pr_signal and vr_signal in directional:
+        return vr_signal
+    if vr_signal in directional and pr_signal == "no clear":
+        return f"weak {vr_signal}"
+    if pr_signal in directional and vr_signal == "no clear":
+        return f"weak {pr_signal}"
+    if vr_signal == "baseline" and pr_signal in directional:
+        return f"push-response only: {pr_signal}"
+    if vr_signal in directional and pr_signal == "insufficient data":
+        return f"weak {vr_signal}"
+    if pr_signal in directional and vr_signal == "insufficient data":
+        return f"weak {pr_signal}"
+    if vr_signal in directional and pr_signal in directional:
         return "mixed evidence"
+    return "no clear"
 
-    merged["joint_interpretation"] = merged.apply(classify, axis=1)
+
+def variance_ratio_curve(close: np.ndarray, base_bars: int) -> pd.DataFrame:
+    base_changes = price_change(close, base_bars)
+    base_var = float(np.var(base_changes, ddof=1))
+    rows = []
+
+    for q_multiple in VR_Q_MULTIPLES:
+        horizon_bars = base_bars * q_multiple
+        if len(close) <= horizon_bars or base_var <= 0:
+            continue
+        horizon_changes = price_change(close, horizon_bars)
+        vr = float(np.var(horizon_changes, ddof=1) / (q_multiple * base_var))
+        rows.append(
+            {
+                "base_bars": base_bars,
+                "base_label": horizon_label(base_bars),
+                "q_multiple": q_multiple,
+                "horizon_bars": horizon_bars,
+                "horizon_label": horizon_label(horizon_bars),
+                "horizon_minutes": horizon_bars * BASE_BAR_MINUTES,
+                "variance_ratio": vr,
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    out["vr_curve_change"] = out["variance_ratio"].diff()
+    out.loc[out["q_multiple"] == 1, "vr_curve_change"] = np.nan
+    out["vr_signal"] = out["vr_curve_change"].map(direction_label)
+    out.loc[out["q_multiple"] == 1, "vr_signal"] = "baseline"
+    return out
+
+
+def run_variance_ratio(close: np.ndarray) -> tuple[pd.DataFrame, pd.DataFrame]:
+    curves = pd.concat([variance_ratio_curve(close, q) for q in VR_BASE_HORIZONS], ignore_index=True)
+    main = curves.loc[curves["base_bars"] == 1].copy()
+    return main, curves
+
+
+def push_response_bins(close: np.ndarray, bars: int) -> pd.DataFrame:
+    push = close[bars::bars] - close[:-bars:bars]
+    response = close[2 * bars :: bars] - close[bars:-bars:bars]
+    n = min(len(push), len(response))
+    push = push[:n].astype(float)
+    response = response[:n].astype(float)
+
+    scale = float(np.std(push, ddof=1)) if n > 1 else float("nan")
+    if n < MIN_BIN_COUNT * 3 or not np.isfinite(scale) or scale <= 0:
+        return pd.DataFrame()
+
+    x = push / scale
+    y = response / scale
+    lo, hi = np.quantile(x, [PR_TRIM, 1.0 - PR_TRIM])
+    keep = (x >= lo) & (x <= hi)
+    x = x[keep]
+    y = y[keep]
+    if len(x) < MIN_BIN_COUNT * 3:
+        return pd.DataFrame()
+
+    edges = np.unique(np.quantile(x, np.linspace(0.0, 1.0, PR_BINS + 1)))
+    if len(edges) < 4:
+        return pd.DataFrame()
+
+    bin_id = np.digitize(x, edges[1:-1], right=True)
+    rows = []
+    for i in range(len(edges) - 1):
+        mask = bin_id == i
+        count = int(mask.sum())
+        if count < MIN_BIN_COUNT:
+            continue
+        rows.append(
+            {
+                "horizon_bars": bars,
+                "horizon_label": horizon_label(bars),
+                "horizon_minutes": bars * BASE_BAR_MINUTES,
+                "bin": i + 1,
+                "n": count,
+                "push_mean": float(np.mean(x[mask])),
+                "response_mean": float(np.mean(y[mask])),
+                "response_se": float(np.std(y[mask], ddof=1) / np.sqrt(count)),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def push_response_summary(curve: pd.DataFrame, bars: int) -> dict[str, float | int | str]:
+    base = {
+        "horizon_bars": bars,
+        "horizon_label": horizon_label(bars),
+        "horizon_minutes": bars * BASE_BAR_MINUTES,
+    }
+    if curve.empty or len(curve) < 3:
+        return {
+            **base,
+            "n_push_response_pairs": 0,
+            "response_curve_slope": float("nan"),
+            "signed_conditional_response": float("nan"),
+            "pr_signal": "insufficient data",
+        }
+
+    x = curve["push_mean"].to_numpy(dtype=float)
+    y = curve["response_mean"].to_numpy(dtype=float)
+    w = curve["n"].to_numpy(dtype=float)
+    x_bar = float(np.average(x, weights=w))
+    y_bar = float(np.average(y, weights=w))
+    centered_x = x - x_bar
+    denom = float(np.sum(w * centered_x**2))
+    slope = float(np.sum(w * centered_x * (y - y_bar)) / denom) if denom > 0 else float("nan")
+    signed_response = float(np.average(np.sign(x) * y, weights=w))
+
+    return {
+        **base,
+        "n_push_response_pairs": int(curve["n"].sum()),
+        "response_curve_slope": slope,
+        "signed_conditional_response": signed_response,
+        "pr_signal": direction_label(slope),
+    }
+
+
+def run_push_response(close: np.ndarray) -> tuple[pd.DataFrame, pd.DataFrame]:
+    curves = []
+    summaries = []
+    for bars in PR_HORIZONS:
+        curve = push_response_bins(close, bars)
+        if not curve.empty:
+            curves.append(curve)
+        summaries.append(push_response_summary(curve, bars))
+    curve_df = pd.concat(curves, ignore_index=True) if curves else pd.DataFrame()
+    summary_df = pd.DataFrame(summaries)
+    return curve_df, summary_df
+
+
+def combined_table(vr_main: pd.DataFrame, pr_summary: pd.DataFrame) -> pd.DataFrame:
+    merged = vr_main.merge(
+        pr_summary,
+        on=("horizon_bars", "horizon_label", "horizon_minutes"),
+        how="inner",
+    )
+    merged["joint_reading"] = [joint_label(vr, pr) for vr, pr in zip(merged["vr_signal"], merged["pr_signal"])]
     return merged
 
 
-def interpretation_score(label: str) -> float:
-    scores = {
-        "trend-following": 2.0,
-        "weak trend-following": 1.0,
-        "push-response only: trend-following": 1.0,
-        "mixed evidence": 0.0,
-        "baseline": 0.0,
-        "no clear inefficiency": 0.0,
-        "push-response only: mean-reverting": -1.0,
-        "weak mean-reverting": -1.0,
-        "mean-reverting": -2.0,
-    }
-    return scores.get(label, 0.0)
-
-
 def compact_ranges(df: pd.DataFrame, labels: set[str]) -> str:
-    ordered = df.sort_values("horizon_minutes").reset_index(drop=True)
-    idxs = ordered.index[ordered["joint_interpretation"].isin(labels)].to_list()
-    if not idxs:
+    selected = df.loc[df["joint_reading"].isin(labels)].sort_values("horizon_minutes").reset_index(drop=True)
+    if selected.empty:
         return ""
 
     ranges = []
-    start = prev = idxs[0]
-    for idx in idxs[1:]:
-        if idx == prev + 1:
-            prev = idx
+    start = prev = 0
+    for i in range(1, len(selected)):
+        current_minutes = selected.loc[i, "horizon_minutes"]
+        previous_minutes = selected.loc[i - 1, "horizon_minutes"]
+        if current_minutes <= previous_minutes * 2.1:
+            prev = i
             continue
         ranges.append((start, prev))
-        start = prev = idx
+        start = prev = i
     ranges.append((start, prev))
 
-    labels_out = []
+    output = []
     for start, end in ranges:
-        left = ordered.loc[start, "horizon_label"]
-        right = ordered.loc[end, "horizon_label"]
-        labels_out.append(left if start == end else f"{left} to {right}")
-    return "; ".join(labels_out)
+        left = selected.loc[start, "horizon_label"]
+        right = selected.loc[end, "horizon_label"]
+        output.append(left if start == end else f"{left} to {right}")
+    return "; ".join(output)
 
 
-def interpretation_rows(ticker: str, combined_df: pd.DataFrame) -> pd.DataFrame:
-    rows = [
-        {
-            "ticker": ticker,
-            "signal_type": "mean_reversion",
-            "time_scale": compact_ranges(
-                combined_df, {"mean-reverting", "weak mean-reverting", "push-response only: mean-reverting"}
-            ),
-        },
-        {
-            "ticker": ticker,
-            "signal_type": "trend_following",
-            "time_scale": compact_ranges(
-                combined_df, {"trend-following", "weak trend-following", "push-response only: trend-following"}
-            ),
-        },
-        {
-            "ticker": ticker,
-            "signal_type": "no_clear_inefficiency",
-            "time_scale": compact_ranges(combined_df, {"no clear inefficiency"}),
-        },
-    ]
-    return pd.DataFrame(rows)
+def inefficiency_summary(ticker: str, combined: pd.DataFrame) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "ticker": ticker,
+                "signal_type": "mean_reversion",
+                "time_scale": compact_ranges(
+                    combined,
+                    {"mean-reverting", "weak mean-reverting", "push-response only: mean-reverting"},
+                ),
+            },
+            {
+                "ticker": ticker,
+                "signal_type": "trend_following",
+                "time_scale": compact_ranges(
+                    combined,
+                    {"trend-following", "weak trend-following", "push-response only: trend-following"},
+                ),
+            },
+            {
+                "ticker": ticker,
+                "signal_type": "no_clear",
+                "time_scale": compact_ranges(combined, {"no clear"}),
+            },
+        ]
+    )
 
 
-def statistical_testing_table(combined_df: pd.DataFrame) -> pd.DataFrame:
-    ordered = combined_df.sort_values("horizon_minutes")
+def presentation_table(combined: pd.DataFrame) -> pd.DataFrame:
+    ordered = combined.sort_values("horizon_minutes")
     return pd.DataFrame(
         {
             "Horizon": ordered["horizon_label"],
-            "VR": ordered["variance_ratio"].map(lambda x: f"{x:.4f}" if np.isfinite(x) else "n/a"),
-            "VR robust p": ordered["vr_p_heteroskedastic"].map(p_label),
-            "VR signal": ordered["vr_interpretation"],
-            "PR beta": ordered["beta"].map(lambda x: f"{x:.4f}" if np.isfinite(x) else "n/a"),
-            "PR beta p": ordered["beta_p_value"].map(p_label),
-            "PR signal": ordered["pr_interpretation"],
-            "Joint reading": ordered["joint_interpretation"],
+            "VR": ordered["variance_ratio"].map(lambda x: f"{x:.4f}"),
+            "VR curve change": ordered["vr_curve_change"].map(lambda x: f"{x:.4f}" if np.isfinite(x) else "n/a"),
+            "VR signal": ordered["vr_signal"],
+            "Push-response slope": ordered["response_curve_slope"].map(
+                lambda x: f"{x:.4f}" if np.isfinite(x) else "n/a"
+            ),
+            "Push-response signal": ordered["pr_signal"],
+            "Joint reading": ordered["joint_reading"],
         }
     )
 
 
-def plot_variance_ratio(ticker: str, vr_df: pd.DataFrame, output_dir: Path) -> None:
+def plot_variance_ratio(ticker: str, curves: pd.DataFrame, output_dir: Path) -> None:
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(vr_df["horizon_minutes"], vr_df["variance_ratio"], marker="o")
-    significant = vr_df["vr_p_heteroskedastic"] < SIGNIFICANCE_LEVEL
-    ax.scatter(
-        vr_df.loc[significant, "horizon_minutes"],
-        vr_df.loc[significant, "variance_ratio"],
-        s=80,
-        facecolors="none",
-        edgecolors="black",
-    )
-    ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
-    ax.set_title(f"{ticker} Variance Ratio")
+    for base_label, curve in curves.groupby("base_label", sort=False):
+        curve = curve.sort_values("horizon_minutes")
+        ax.plot(curve["horizon_minutes"], curve["variance_ratio"], marker="o", linewidth=1.7, label=base_label)
+
+    ticks = sorted(curves["horizon_minutes"].unique())
+    labels = curves.drop_duplicates("horizon_minutes").set_index("horizon_minutes")["horizon_label"].to_dict()
+    ax.set_title(f"{ticker} Variance Ratio Curve")
     ax.set_xlabel("Horizon")
-    ax.set_ylabel("Variance Ratio")
+    ax.set_ylabel("VR(q)")
     ax.set_xscale("log")
-    ax.set_xticks(vr_df["horizon_minutes"])
-    ax.set_xticklabels(vr_df["horizon_label"], rotation=35, ha="right")
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([labels[tick] for tick in ticks], rotation=35, ha="right")
+    ax.legend(title="Base shift")
     ax.grid(alpha=0.3)
     fig.tight_layout()
     fig.savefig(output_dir / "variance_ratio.png", dpi=160)
     plt.close(fig)
 
 
-def plot_push_response(ticker: str, pr_df: pd.DataFrame, output_dir: Path) -> None:
+def plot_push_response(ticker: str, curves: pd.DataFrame, output_dir: Path) -> None:
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(pr_df["horizon_minutes"], pr_df["beta"], marker="o")
-    significant = pr_df["beta_p_value"] < SIGNIFICANCE_LEVEL
-    ax.scatter(
-        pr_df.loc[significant, "horizon_minutes"],
-        pr_df.loc[significant, "beta"],
-        s=80,
-        facecolors="none",
-        edgecolors="black",
-    )
+    max_abs_push = 3.0
+    for bars in PR_PLOT_HORIZONS:
+        curve = curves.loc[curves["horizon_bars"] == bars].sort_values("push_mean")
+        if curve.empty:
+            continue
+        ax.plot(curve["push_mean"], curve["response_mean"], marker="o", linewidth=1.7, label=horizon_label(bars))
+        max_abs_push = max(max_abs_push, float(np.nanmax(np.abs(curve["push_mean"]))))
+
     ax.axhline(0.0, color="gray", linestyle="--", linewidth=1)
-    ax.set_title(f"{ticker} Push-Response Beta")
-    ax.set_xlabel("Horizon")
-    ax.set_ylabel("Beta")
-    ax.set_xscale("log")
-    ax.set_xticks(pr_df["horizon_minutes"])
-    ax.set_xticklabels(pr_df["horizon_label"], rotation=35, ha="right")
+    ax.axvline(0.0, color="gray", linestyle="--", linewidth=1)
+    max_abs_push = min(max_abs_push * 1.05, 4.0)
+    ax.set_xlim(-max_abs_push, max_abs_push)
+    ax.set_title(f"{ticker} Push-Response Diagram")
+    ax.set_xlabel("Push x: previous price change / sigma")
+    ax.set_ylabel("Average response R(x): next price change / sigma")
+    ax.legend(title="Horizon")
     ax.grid(alpha=0.3)
     fig.tight_layout()
-    fig.savefig(output_dir / "push_response_beta.png", dpi=160)
+    fig.savefig(output_dir / "push_response_diagram.png", dpi=160)
     plt.close(fig)
 
 
-def plot_inefficiency(ticker: str, combined_df: pd.DataFrame, output_dir: Path) -> None:
-    scores = combined_df["joint_interpretation"].map(interpretation_score)
-    fig, ax = plt.subplots(figsize=(11, 4.8))
-    ax.scatter(combined_df["horizon_minutes"], scores, s=90)
-    ax.axhline(0.0, color="gray", linestyle="--", linewidth=1)
+def plot_inefficiency(ticker: str, combined: pd.DataFrame, output_dir: Path) -> None:
+    scores = {
+        "mean-reverting": -2,
+        "weak mean-reverting": -1,
+        "push-response only: mean-reverting": -1,
+        "mixed evidence": 0,
+        "no clear": 0,
+        "weak trend-following": 1,
+        "push-response only: trend-following": 1,
+        "trend-following": 2,
+    }
+    y = combined["joint_reading"].map(scores)
+
+    fig, ax = plt.subplots(figsize=(10, 4.8))
+    ax.scatter(combined["horizon_minutes"], y, s=90)
+    ax.axhline(0, color="gray", linestyle="--", linewidth=1)
     ax.set_title(f"{ticker} Inefficiency by Time Scale")
     ax.set_xlabel("Horizon")
     ax.set_ylabel("Signal")
     ax.set_xscale("log")
-    ax.set_xticks(combined_df["horizon_minutes"])
-    ax.set_xticklabels(combined_df["horizon_label"], rotation=35, ha="right")
+    ax.set_xticks(combined["horizon_minutes"])
+    ax.set_xticklabels(combined["horizon_label"], rotation=35, ha="right")
     ax.set_yticks([-2, -1, 0, 1, 2])
-    ax.set_yticklabels(
-        ["mean-reverting", "weak mean-reverting", "no clear", "weak trend-following", "trend-following"]
-    )
+    ax.set_yticklabels(["mean-reverting", "weak mean-reverting", "no clear", "weak trend-following", "trend-following"])
     ax.grid(alpha=0.3)
     fig.tight_layout()
     fig.savefig(output_dir / "inefficiency_timescale.png", dpi=160)
     plt.close(fig)
 
 
-def save_market_outputs(
-    market: MarketConfig,
-    df: pd.DataFrame,
-    vr_df: pd.DataFrame,
-    pr_df: pd.DataFrame,
-    combined_df: pd.DataFrame,
-) -> pd.DataFrame:
+def save_market_outputs(market: MarketConfig, df: pd.DataFrame) -> pd.DataFrame:
+    close = df["Close"].to_numpy(dtype=float)
+    vr_main, vr_curves = run_variance_ratio(close)
+    pr_curves, pr_summary = run_push_response(close)
+    combined = combined_table(vr_main, pr_summary)
+    summary = inefficiency_summary(market.ticker, combined)
+
     output_dir = OUTPUT_DIR / market.ticker
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -527,39 +454,38 @@ def save_market_outputs(
             }
         ]
     )
+
     market_info.to_csv(output_dir / "market_info.csv", index=False)
-    vr_df.to_csv(output_dir / "variance_ratio.csv", index=False)
-    pr_df.to_csv(output_dir / "push_response.csv", index=False)
-    combined_df.to_csv(output_dir / "random_walk_tests_combined.csv", index=False)
-    statistical_testing_table(combined_df).to_csv(output_dir / "statistical_testing_table.csv", index=False)
-    interp_df = interpretation_rows(market.ticker, combined_df)
-    interp_df.to_csv(output_dir / "inefficiency_interpretation.csv", index=False)
+    vr_main.to_csv(output_dir / "variance_ratio.csv", index=False)
+    vr_curves.to_csv(output_dir / "variance_ratio_curves.csv", index=False)
+    pr_curves.to_csv(output_dir / "push_response.csv", index=False)
+    pr_summary.to_csv(output_dir / "push_response_summary.csv", index=False)
+    combined.to_csv(output_dir / "random_walk_tests_combined.csv", index=False)
+    presentation_table(combined).to_csv(output_dir / "statistical_testing_table.csv", index=False)
+    summary.to_csv(output_dir / "inefficiency_interpretation.csv", index=False)
 
-    plot_variance_ratio(market.ticker, vr_df, output_dir)
-    plot_push_response(market.ticker, pr_df, output_dir)
-    plot_inefficiency(market.ticker, combined_df, output_dir)
-    return interp_df
+    plot_variance_ratio(market.ticker, vr_curves, output_dir)
+    plot_push_response(market.ticker, pr_curves, output_dir)
+    plot_inefficiency(market.ticker, combined, output_dir)
 
-
-def run_market(ticker: str) -> pd.DataFrame:
-    market = load_market_config(ticker)
-    df = load_price_data(data_file(ticker))
-    vr_df = run_variance_ratio(df)
-    pr_df = run_push_response(df)
-    combined_df = combine_tests(vr_df, pr_df)
-    interp_df = save_market_outputs(market, df, vr_df, pr_df, combined_df)
+    old_beta_plot = output_dir / "push_response_beta.png"
+    if old_beta_plot.exists():
+        old_beta_plot.unlink()
 
     print(f"{market.ticker}: {len(df):,} bars, {df['DateTime'].iloc[0]} to {df['DateTime'].iloc[-1]}")
-    print(statistical_testing_table(combined_df).to_string(index=False))
+    print(presentation_table(combined).to_string(index=False))
     print()
-    return interp_df
+    return summary
 
 
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    comparison = pd.concat([run_market(ticker) for ticker in MARKETS], ignore_index=True)
-    comparison.to_csv(OUTPUT_DIR / "co_btc_inefficiency_comparison.csv", index=False)
+    summaries = []
+    for ticker in MARKETS:
+        market = load_market_config(ticker)
+        df = load_price_data(data_file(ticker))
+        summaries.append(save_market_outputs(market, df))
+    pd.concat(summaries, ignore_index=True).to_csv(OUTPUT_DIR / "co_btc_inefficiency_comparison.csv", index=False)
 
 
 if __name__ == "__main__":

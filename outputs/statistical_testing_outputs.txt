@@ -1,4 +1,4 @@
 Statistical testing outputs for Subgroup 3:
-- Variance Ratio tests
-- Push-Response tests
-- CO vs BTC inefficiency time-scale summary
+- Variance Ratio curve test using class-note price-change variance scaling
+- Push-Response diagram using conditional average response R(x)=E[y|x]
+- CO vs BTC short-horizon inefficiency time-scale summary

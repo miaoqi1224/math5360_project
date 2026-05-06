@@ -1,4 +1,4 @@
 ticker,signal_type,time_scale
-CO,mean_reversion,5 min to 2.0 hr
-CO,trend_following,128.0 hr (~5.3 days)
-CO,no_clear_inefficiency,4.0 hr to 64.0 hr (~2.7 days); 256.0 hr (~10.7 days) to 833.3 hr (~34.7 days)
+CO,mean_reversion,5 min to 10 min; 2.0 hr; 8.0 hr to 16.0 hr
+CO,trend_following,4.0 hr
+CO,no_clear,15 min to 1.0 hr
